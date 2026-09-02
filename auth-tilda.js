@@ -1,3 +1,4 @@
+
 (function () {
   "use strict";
 
@@ -165,93 +166,76 @@
     return true;
   }
 
-  function fillTokenField() {
+  async function loadUserProfileAndDisplay() {
     const token =
       localStorage.getItem(TOKEN_KEY) ||
       localStorage.getItem("authToken") ||
       "";
 
-    console.log("[Tilda Auth] token from localStorage:", token);
-
     if (!token) {
-      console.warn("[Tilda Auth] No token found in localStorage");
+      console.warn("[Tilda Auth] No auth token for /lk/user");
       return;
     }
 
-    // The token is displayed in the Tilda text block.
-    // Current block:
-    // <div class="tn-atom" field="tn_text_1788344000942000002">токен</div>
-    const elements = document.querySelectorAll(".auth-token .tn-atom");
-
-    // Also support the old .auth-token selector if it exists.
-    const oldElements = document.querySelectorAll(".auth-token");
-
-    const allElements = Array.from(
-      new Set([...elements, ...oldElements])
-    );
-
-    if (!allElements.length) {
-      console.warn(
-        "[Tilda Auth] Token element not found yet. " +
-        'Expected [field="tn_text_1788344000942000002"]'
+    try {
+      const response = await fetch(
+        API_BASE_URL + "/lk/user",
+        {
+          method: "GET",
+          headers: {
+            "accept": "application/json",
+            "x-platform-version": PLATFORM_VERSION,
+            "Authorization": "Bearer " + token,
+          },
+        }
       );
-      return;
-    }
 
-    allElements.forEach((element) => {
-      if (
-        element.tagName === "INPUT" ||
-        element.tagName === "TEXTAREA"
-      ) {
-        element.value = token;
-        element.setAttribute("value", token);
-        element.dispatchEvent(
-          new Event("input", { bubbles: true })
-        );
-        element.dispatchEvent(
-          new Event("change", { bubbles: true })
-        );
-      } else {
-        // Tilda text block: replace "токен" with the real token.
-        element.textContent = token;
+      const text = await response.text();
+
+      let user = {};
+      try {
+        user = text ? JSON.parse(text) : {};
+      } catch {
+        throw new Error("Некорректный ответ /lk/user");
       }
-    });
 
-    console.log(
-      "[Tilda Auth] token written to status page:",
-      allElements.length
-    );
+      console.log("[Tilda Auth] /lk/user response:", response.status, user);
+
+      if (!response.ok) {
+        throw new Error(
+          user?.error ||
+            user?.message ||
+            user?.detail ||
+            ("Ошибка /lk/user: " + response.status)
+        );
+      }
+
+      const fullName = [user?.name, user?.surname]
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+
+      const element = document.querySelector(".auth-token .tn-atom");
+
+      if (!element) {
+        console.warn("[Tilda Auth] .auth-token .tn-atom not found");
+        return;
+      }
+
+      // One single write. No interval and no MutationObserver.
+      element.textContent = fullName || "Успешная авторизация";
+
+      console.log("[Tilda Auth] User name displayed:", fullName);
+    } catch (error) {
+      console.error("[Tilda Auth] Failed to load user profile:", error);
+    }
   }
 
   function initStatusPage() {
     if (currentPath() !== "/status") return;
 
-    // Tilda can render blocks after our script has executed,
-    // so try several times.
-    fillTokenField();
-
-    let attempts = 0;
-
-    const timer = setInterval(() => {
-      attempts++;
-      fillTokenField();
-
-      if (attempts >= 20) {
-        clearInterval(timer);
-      }
-    }, 250);
-
-    // Also catch late DOM changes.
-    const observer = new MutationObserver(() => {
-      fillTokenField();
-    });
-
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true,
-    });
-
-    setTimeout(() => observer.disconnect(), 6000);
+    // Execute exactly once after the status page is ready.
+    loadUserProfileAndDisplay();
   }
 
   async function login(button) {
