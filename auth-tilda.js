@@ -1,4 +1,3 @@
-
 (function () {
   "use strict";
 
@@ -179,22 +178,32 @@
       return;
     }
 
-    // Main expected element.
-    const elements = document.querySelectorAll(".auth-token");
+    // The token is displayed in the Tilda text block.
+    // Current block:
+    // <div class="tn-atom" field="tn_text_1788344000942000002">токен</div>
+    const elements = document.querySelectorAll(".auth-token .tn-atom");
 
-    if (!elements.length) {
-      console.warn("[Tilda Auth] .auth-token not found yet");
+    // Also support the old .auth-token selector if it exists.
+    const oldElements = document.querySelectorAll(".auth-token");
+
+    const allElements = Array.from(
+      new Set([...elements, ...oldElements])
+    );
+
+    if (!allElements.length) {
+      console.warn(
+        "[Tilda Auth] Token element not found yet. " +
+        'Expected [field="tn_text_1788344000942000002"]'
+      );
       return;
     }
 
-    elements.forEach((element) => {
+    allElements.forEach((element) => {
       if (
         element.tagName === "INPUT" ||
         element.tagName === "TEXTAREA"
       ) {
         element.value = token;
-
-        // Make Tilda/browser notice the value.
         element.setAttribute("value", token);
         element.dispatchEvent(
           new Event("input", { bubbles: true })
@@ -203,13 +212,14 @@
           new Event("change", { bubbles: true })
         );
       } else {
+        // Tilda text block: replace "токен" with the real token.
         element.textContent = token;
       }
     });
 
     console.log(
-      "[Tilda Auth] token written to .auth-token:",
-      elements.length
+      "[Tilda Auth] token written to status page:",
+      allElements.length
     );
   }
 
