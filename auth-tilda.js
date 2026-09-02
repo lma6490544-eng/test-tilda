@@ -1,76 +1,101 @@
-(() => {
+(function () {
   "use strict";
-  const API_BASE_URL = "https://itprorab.metasymbiont.com/api/v1";
+
+  const API_BASE_URL =
+    "https://itprorab.metasymbiont.com/api/v1";
+
   const PLATFORM_VERSION = "web-1.0.0";
 
-  const KEYS = {
-    token: "tildaAuthToken",
-    phone: "tildaRegisterPhone",
-    password: "tildaRegisterPassword",
-    userName: "tildaUserName",
-  };
+  const TOKEN_KEY = "tildaAuthToken";
+  const REGISTER_PHONE_KEY = "tildaRegisterPhone";
+  const REGISTER_PASSWORD_KEY = "tildaRegisterPassword";
 
   const ENDPOINTS = {
     login: "/auth/login",
-    sendPin: "/auth/user/phone/pin",
-    confirmPin: "/auth/user/phone/pin/confirm",
-    createUser: "/auth/user",
+    registerPin: "/auth/user/phone/pin",
+    registerPinConfirm: "/auth/user/phone/pin/confirm",
+    registerUser: "/auth/user",
     user: "/lk/user",
   };
 
-  // ---------- helpers ----------
+  function currentPath() {
+    return window.location.pathname.replace(/\/+$/, "") || "/";
+  }
 
-  function normalizePhone(value) {
-    const raw = String(value || "").trim();
-    const digits = raw.replace(/\D/g, "");
+  function getInput(name) {
+    return document.querySelector('[name="' + name + '"]');
+  }
 
-    if (!digits) return "";
+  function getPhone() {
+    const hiddenPhone = getInput("phone");
+    let phone = hiddenPhone?.value?.trim() || "";
 
-    if (digits.length === 11 && digits[0] === "8") {
-      return "+7" + digits.slice(1);
+    if (!phone) {
+      const visiblePhone = document.querySelector(
+        'input[name="tildaspec-phone-part[]"]'
+      );
+      phone = visiblePhone?.value?.trim() || "";
     }
 
-    if (digits.length === 11 && digits[0] === "7") {
-      return "+" + digits;
+    // +7 (904) 101-01-01 -> +79041010101
+    return phone.replace(/[^\d+]/g, "");
+  }
+
+  function getPassword() {
+    return getInput("password")?.value?.trim() || "";
+  }
+
+  function getCode() {
+    // Current Tilda confirm field.
+    return getInput("code")?.value?.trim() || "";
+  }
+
+  function showError(message) {
+    console.error("[Tilda Auth]", message);
+
+    let box = document.querySelector(".auth-error");
+
+    if (!box) {
+      box = document.createElement("div");
+      box.className = "auth-error";
+      box.style.marginTop = "15px";
+      box.style.color = "red";
+      box.style.fontSize = "14px";
+
+      (document.querySelector(".t-form") || document.body)
+        .appendChild(box);
     }
 
-    if (raw.startsWith("+")) {
-      return "+" + digits;
+    box.textContent = message;
+    box.style.display = "block";
+  }
+
+  function clearError() {
+    const box = document.querySelector(".auth-error");
+
+    if (box) {
+      box.textContent = "";
+      box.style.display = "none";
     }
-
-    return digits;
   }
 
-  function input(name) {
-    return document.querySelector(`input[name="${name}"]`);
+  function setLoading(button, loading) {
+    if (!button) return;
+
+    button.disabled = loading;
+
+    const text = button.querySelector(".t-submit__text");
+
+    if (text) {
+      text.textContent = loading ? "Загрузка..." : "SUBMIT";
+    }
   }
 
-  function phone() {
-    const hidden = input("phone");
-    const visible = input("tildaspec-phone-part[]");
+  async function apiRequest(method, endpoint, body, token) {
+    const url = API_BASE_URL + endpoint;
 
-    return normalizePhone(
-      (hidden && hidden.value) ||
-      (visible && visible.value) ||
-      ""
-    );
-  }
-
-  function password() {
-    return input("password")?.value || "";
-  }
-
-  function code() {
-    return input("code")?.value.trim() || "";
-  }
-
-  function requestId() {
-    return crypto.randomUUID();
-  }
-
-  async function api(method, endpoint, body, token = "") {
     const headers = {
-      "Accept": "application/json",
+      "accept": "application/json",
       "x-platform-version": PLATFORM_VERSION,
     };
 
@@ -79,279 +104,411 @@
     }
 
     if (token) {
-      headers["Authorization"] = `Bearer ${token}`;
+      headers["Authorization"] = "Bearer " + token;
     }
 
-    const response = await fetch(API_BASE_URL + endpoint, {
-      method,
-      headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
+    console.log("[Tilda Auth] " + method + ":", url);
+
+    if (body !== undefined) {
+      console.log("[Tilda Auth] request body:", body);
+    }
+
+    const response = await fetch(url, {
+      method: method,
+      headers: headers,
+      ...(body !== undefined
+        ? { body: JSON.stringify(body) }
+        : {}),
     });
 
     const text = await response.text();
 
-    let data;
+    let data = {};
+
     try {
-      data = text ? JSON.parse(text) : null;
+      data = text ? JSON.parse(text) : {};
     } catch {
-      data = text;
+      data = { raw: text };
     }
 
-    if (!response.ok) {
-      const message =
-        data?.message ||
-        data?.errorDescription ||
-        data?.error ||
-        `HTTP ${response.status}`;
+    console.log(
+      "[Tilda Auth] response:",
+      response.status,
+      data
+    );
 
-      throw new Error(message);
+    if (!response.ok) {
+      throw new Error(
+        data?.error ||
+          data?.message ||
+          data?.detail ||
+          data?.status ||
+          ("Ошибка API: " + response.status)
+      );
     }
 
     return data;
   }
 
-  function setBusy(button, busy) {
-    if (!button) return;
-
-    button.dataset.authBusy = busy ? "1" : "0";
-    button.disabled = busy;
-
-    if (busy) {
-      button.setAttribute("aria-busy", "true");
-    } else {
-      button.removeAttribute("aria-busy");
-    }
-  }
-
-  function showError(error) {
-    console.error("[Custom Auth]", error);
-
-    const message = error?.message || "Произошла ошибка.";
-
-    // Do not use Tilda's form validation/captcha.
-    // Show our own error.
-    let box = document.querySelector("[data-custom-auth-error]");
-
-    if (!box) {
-      box = document.createElement("div");
-      box.dataset.customAuthError = "1";
-      box.style.cssText =
-        "margin-top:10px;color:#c00;font-size:14px;line-height:1.4;";
-
-      const target =
-        document.querySelector("input[name='code']") ||
-        document.querySelector("input[name='password']") ||
-        document.querySelector("input[name='tildaspec-phone-part[]']") ||
-        document.querySelector("input[name='phone']");
-
-      (target?.parentElement || document.body).appendChild(box);
+  function getToken(data) {
+    if (typeof data === "string") {
+      return data;
     }
 
-    box.textContent = message;
-  }
-
-  function clearError() {
-    document.querySelector("[data-custom-auth-error]")?.remove();
-  }
-
-  function redirect(path) {
-    window.location.assign(path);
-  }
-
-  async function getUserAndOpenStatus(token) {
-    const user = await api("GET", ENDPOINTS.user, undefined, token);
-
-    const fullName = [
-      user?.name,
-      user?.surname,
-    ]
-      .map(value => String(value || "").trim())
-      .filter(Boolean)
-      .join(" ");
-
-    sessionStorage.setItem(KEYS.userName, fullName);
-
-    redirect("/status");
-  }
-
-  // ---------- API flows ----------
-
-  async function loginFlow() {
-    const login = phone();
-    const pass = password();
-
-    if (!login) throw new Error("Введите телефон.");
-    if (!pass) throw new Error("Введите пароль.");
-
-    const result = await api("POST", ENDPOINTS.login, {
-      login,
-      password: pass,
-      phone: "",
-    });
-
-    if (!result?.token) {
-      throw new Error("Сервер не вернул токен.");
-    }
-
-    sessionStorage.setItem(KEYS.token, result.token);
-
-    await getUserAndOpenStatus(result.token);
-  }
-
-  async function registerSendPinFlow() {
-    const login = phone();
-    const pass = password();
-
-    if (!login) throw new Error("Введите телефон.");
-    if (!pass) throw new Error("Введите пароль.");
-
-    sessionStorage.setItem(KEYS.phone, login);
-    sessionStorage.setItem(KEYS.password, pass);
-
-    await api("POST", ENDPOINTS.sendPin, {
-      login,
-    });
-
-    redirect("/confirm");
-  }
-
-  async function registerConfirmFlow() {
-    const login = sessionStorage.getItem(KEYS.phone) || "";
-    const pass = sessionStorage.getItem(KEYS.password) || "";
-    const pin = code();
-
-    if (!login || !pass) {
-      throw new Error("Данные регистрации потеряны. Начните регистрацию заново.");
-    }
-
-    if (!pin) {
-      throw new Error("Введите код из SMS.");
-    }
-
-    const confirmation = await api("POST", ENDPOINTS.confirmPin, {
-      pin,
-      login,
-    });
-
-    if (confirmation?.status !== "PHONE_CONFIRMED") {
-      throw new Error("Телефон не подтвержден.");
-    }
-
-    // IMPORTANT:
-    // No login request here.
-    // User is created immediately after phone confirmation.
-    const createdUser = await api("POST", ENDPOINTS.createUser, {
-      login,
-      password: pass,
-      politicAgreements: true,
-      hash: requestId(),
-    });
-
-    if (!createdUser?.token) {
-      throw new Error("Пользователь создан, но сервер не вернул токен.");
-    }
-
-    sessionStorage.setItem(KEYS.token, createdUser.token);
-
-    // Immediately request user data using the token returned by /auth/user.
-    await getUserAndOpenStatus(createdUser.token);
-  }
-
-  function statusFlow() {
-    const element = document.querySelector(".auth-token .tn-atom");
-
-    if (!element) return;
-
-    element.textContent =
-      sessionStorage.getItem(KEYS.userName) || "";
-  }
-
-  // ---------- OUR OWN BUTTON HANDLING ----------
-
-  /*
-   * We intentionally DO NOT listen to "submit".
-   *
-   * This is the important difference from the previous version.
-   * Tilda's submit/captcha system is never invoked by our flow.
-   */
-
-  function findButton() {
-    // First priority: an explicitly marked custom auth button.
-    const explicit = document.querySelector(
-      "[data-custom-auth-button]"
-    );
-
-    if (explicit) return explicit;
-
-    // Otherwise use the visible submit/button control inside the page.
     return (
-      document.querySelector("button[type='submit']") ||
-      document.querySelector("input[type='submit']") ||
-      document.querySelector(".t-submit")
+      data?.token ||
+      data?.access_token ||
+      data?.data?.token ||
+      data?.data?.access_token ||
+      data?.result?.token ||
+      data?.result?.access_token ||
+      ""
     );
   }
 
-  function bindButton(handler) {
-    const button = findButton();
+  function saveToken(token) {
+    if (!token) {
+      throw new Error("Сервер не вернул token");
+    }
 
-    if (!button) {
-      console.warn("[Custom Auth] Auth button not found.");
+    localStorage.setItem(TOKEN_KEY, token);
+    localStorage.setItem("authToken", token);
+
+    console.log("[Tilda Auth] auth token saved");
+  }
+
+  async function loginWithCredentials(login, password) {
+    const data = await apiRequest(
+      "POST",
+      ENDPOINTS.login,
+      {
+        login,
+        password,
+      }
+    );
+
+    const token = getToken(data);
+
+    if (!token) {
+      console.error("[Tilda Auth] Login response:", data);
+      throw new Error("Сервер не вернул token");
+    }
+
+    saveToken(token);
+
+    return token;
+  }
+
+  async function loadUserAndGoToStatus() {
+    const token =
+      localStorage.getItem(TOKEN_KEY) ||
+      localStorage.getItem("authToken") ||
+      "";
+
+    if (!token) {
+      throw new Error("Не найден токен авторизации");
+    }
+
+    const user = await apiRequest(
+      "GET",
+      ENDPOINTS.user,
+      undefined,
+      token
+    );
+
+    const fullName = [user?.name, user?.surname]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+
+    if (fullName) {
+      localStorage.setItem("tildaUserName", fullName);
+    }
+
+    window.location.href = "/status";
+  }
+
+  async function login(button) {
+    clearError();
+
+    const loginValue = getPhone();
+    const password = getPassword();
+
+    if (!loginValue) {
+      showError("Введите номер телефона");
       return;
     }
 
-    if (button.dataset.customAuthBound === "1") return;
+    if (!password) {
+      showError("Введите пароль");
+      return;
+    }
 
-    button.dataset.customAuthBound = "1";
-    button.setAttribute("type", "button");
+    setLoading(button, true);
 
-    button.addEventListener("click", async event => {
-      // Stop Tilda's click/submit chain.
+    try {
+      await loginWithCredentials(loginValue, password);
+      await loadUserAndGoToStatus();
+    } catch (error) {
+      showError(error.message || "Ошибка авторизации");
+      setLoading(button, false);
+    }
+  }
+
+  async function sendRegisterPin(button) {
+    clearError();
+
+    const loginValue = getPhone();
+    const password = getPassword();
+
+    if (!loginValue) {
+      showError("Введите номер телефона");
+      return;
+    }
+
+    if (!password) {
+      showError("Введите пароль");
+      return;
+    }
+
+    setLoading(button, true);
+
+    try {
+      // Registration now starts with sending the PIN.
+      await apiRequest(
+        "POST",
+        ENDPOINTS.registerPin,
+        {
+          login: loginValue,
+        }
+      );
+
+      // Keep these only for the next confirmation step.
+      sessionStorage.setItem(
+        REGISTER_PHONE_KEY,
+        loginValue
+      );
+
+      sessionStorage.setItem(
+        REGISTER_PASSWORD_KEY,
+        password
+      );
+
+      window.location.href = "/confirm";
+    } catch (error) {
+      showError(
+        error.message || "Не удалось отправить код"
+      );
+      setLoading(button, false);
+    }
+  }
+
+  async function confirmRegisterPin(button) {
+    clearError();
+
+    const pin = getCode();
+
+    const loginValue =
+      sessionStorage.getItem(REGISTER_PHONE_KEY) || "";
+
+    const password =
+      sessionStorage.getItem(REGISTER_PASSWORD_KEY) || "";
+
+    if (!loginValue) {
+      showError(
+        "Не найден номер телефона для подтверждения"
+      );
+      return;
+    }
+
+    if (!password) {
+      showError(
+        "Не найден пароль для завершения регистрации"
+      );
+      return;
+    }
+
+    if (!pin) {
+      showError("Введите код из SMS");
+      return;
+    }
+
+    setLoading(button, true);
+
+    try {
+      const confirmation = await apiRequest(
+        "POST",
+        ENDPOINTS.registerPinConfirm,
+        {
+          pin,
+          login: loginValue,
+        }
+      );
+
+      if (confirmation?.status !== "PHONE_CONFIRMED") {
+        const attempts =
+          confirmation?.attemptsLeft;
+
+        const attemptsText =
+          typeof attempts === "number"
+            ? " Осталось попыток: " + attempts + "."
+            : "";
+
+        throw new Error(
+          "Телефон не подтверждён." + attemptsText
+        );
+      }
+
+      // Phone is confirmed. Create the user immediately.
+      // hash is a client-generated UUID (request id).
+      const userResult = await apiRequest(
+        "POST",
+        ENDPOINTS.registerUser,
+        {
+          login: loginValue,
+          password: password,
+          politicAgreements: true,
+          hash: crypto.randomUUID(),
+        }
+      );
+
+      const token = getToken(userResult);
+
+      if (!token) {
+        console.error("[Tilda Auth] User creation response:", userResult);
+        throw new Error("Сервер не вернул token после регистрации");
+      }
+
+      saveToken(token);
+
+      // Password and phone are no longer needed.
+      sessionStorage.removeItem(
+        REGISTER_PASSWORD_KEY
+      );
+      sessionStorage.removeItem(
+        REGISTER_PHONE_KEY
+      );
+
+      // Use the token returned by /auth/user to get the user's name.
+      await loadUserAndGoToStatus();
+    } catch (error) {
+      showError(
+        error.message ||
+          "Ошибка подтверждения кода"
+      );
+      setLoading(button, false);
+    }
+  }
+
+  function fillStatusName() {
+    if (currentPath() !== "/status") return;
+
+    const fullName =
+      localStorage.getItem("tildaUserName") || "";
+
+    if (!fullName) {
+      console.warn(
+        "[Tilda Auth] User name is not available"
+      );
+      return;
+    }
+
+    const element = document.querySelector(
+      ".auth-token .tn-atom"
+    );
+
+    if (!element) {
+      console.warn(
+        "[Tilda Auth] .auth-token .tn-atom not found"
+      );
+      return;
+    }
+
+    // Exactly one write.
+    element.textContent = fullName;
+
+    console.log(
+      "[Tilda Auth] user name displayed"
+    );
+  }
+
+  function handleSubmit(button) {
+    const path = currentPath();
+
+    if (path === "/" || path === "/auth") {
+      return login(button);
+    }
+
+    if (path === "/register") {
+      return sendRegisterPin(button);
+    }
+
+    if (path === "/confirm") {
+      return confirmRegisterPin(button);
+    }
+  }
+
+  // Intercept Tilda's native form before its own submit handler.
+  document.addEventListener(
+    "click",
+    function (event) {
+      const button = event.target.closest(".t-submit");
+
+      if (!button) return;
+
+      const path = currentPath();
+
+      if (
+        path !== "/" &&
+        path !== "/auth" &&
+        path !== "/register" &&
+        path !== "/confirm"
+      ) {
+        return;
+      }
+
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation();
 
-      if (button.dataset.authBusy === "1") return;
+      handleSubmit(button);
+    },
+    true
+  );
 
-      clearError();
-      setBusy(button, true);
+  document.addEventListener(
+    "submit",
+    function (event) {
+      const form = event.target;
 
-      try {
-        await handler();
-      } catch (error) {
-        showError(error);
-      } finally {
-        setBusy(button, false);
+      if (!form?.classList?.contains("t-form")) return;
+
+      const path = currentPath();
+
+      if (
+        path !== "/" &&
+        path !== "/auth" &&
+        path !== "/register" &&
+        path !== "/confirm"
+      ) {
+        return;
       }
-    }, true);
-  }
 
-  function init() {
-    const path =
-      window.location.pathname.replace(/\/+$/, "") || "/";
-
-    if (path === "/" || path === "/auth") {
-      bindButton(loginFlow);
-      return;
-    }
-
-    if (path === "/register") {
-      bindButton(registerSendPinFlow);
-      return;
-    }
-
-    if (path === "/confirm") {
-      bindButton(registerConfirmFlow);
-      return;
-    }
-
-    if (path === "/status") {
-      statusFlow();
-    }
-  }
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+    },
+    true
+  );
 
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", init, { once: true });
+    document.addEventListener(
+      "DOMContentLoaded",
+      fillStatusName
+    );
   } else {
-    init();
+    fillStatusName();
   }
+
+  console.log("[Tilda Auth] registration flow v6 loaded");
 })();
