@@ -364,7 +364,7 @@
   function handleSubmit(button) {
     const path = currentPath();
 
-    if (path === "/auth") return login(button);
+    if (path === "/" || path === "/auth") return login(button);
     if (path === "/register") return register(button);
     if (path === "/confirm") return confirm(button);
   }
@@ -380,6 +380,7 @@
       const path = currentPath();
 
       if (
+        path !== "/" &&
         path !== "/auth" &&
         path !== "/register" &&
         path !== "/confirm"
@@ -406,6 +407,7 @@
       const path = currentPath();
 
       if (
+        path !== "/" &&
         path !== "/auth" &&
         path !== "/register" &&
         path !== "/confirm"
