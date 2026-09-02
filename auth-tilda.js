@@ -17,23 +17,24 @@
   }
 
   function getPhone() {
-    // Основное значение, которое Tilda сама заполняет из маски
     const hiddenPhone = getInput('phone');
-
+  
+    let phone = '';
+  
     if (hiddenPhone && hiddenPhone.value) {
-      return hiddenPhone.value.trim();
+      phone = hiddenPhone.value.trim();
+    } else {
+      const visiblePhone = document.querySelector(
+        'input[name="tildaspec-phone-part[]"]'
+      );
+  
+      if (visiblePhone && visiblePhone.value) {
+        phone = visiblePhone.value.trim();
+      }
     }
-
-    // Запасной вариант — видимое поле телефонной маски
-    const visiblePhone = document.querySelector(
-      'input[name="tildaspec-phone-part[]"]'
-    );
-
-    if (visiblePhone && visiblePhone.value) {
-      return visiblePhone.value.trim();
-    }
-
-    return '';
+  
+    // Оставляем только + и цифры
+    return phone.replace(/[^\d+]/g, '');
   }
 
   function getPassword() {
