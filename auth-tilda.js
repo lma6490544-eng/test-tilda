@@ -1,21 +1,24 @@
 (() => {
   "use strict";
-
   const API_BASE_URL = "https://itprorab.metasymbiont.com/api/v1";
   const PLATFORM_VERSION = "web-1.0.0";
 
-  const TOKEN_KEY = "tildaAuthToken";
-  const REGISTER_PHONE_KEY = "tildaRegisterPhone";
-  const REGISTER_PASSWORD_KEY = "tildaRegisterPassword";
-  const USER_NAME_KEY = "tildaUserName";
+  const KEYS = {
+    token: "tildaAuthToken",
+    phone: "tildaRegisterPhone",
+    password: "tildaRegisterPassword",
+    userName: "tildaUserName",
+  };
 
   const ENDPOINTS = {
     login: "/auth/login",
-    registerPin: "/auth/user/phone/pin",
-    registerPinConfirm: "/auth/user/phone/pin/confirm",
-    registerUser: "/auth/user",
+    sendPin: "/auth/user/phone/pin",
+    confirmPin: "/auth/user/phone/pin/confirm",
+    createUser: "/auth/user",
     user: "/lk/user",
   };
+
+  // ---------- helpers ----------
 
   function normalizePhone(value) {
     const raw = String(value || "").trim();
@@ -23,11 +26,11 @@
 
     if (!digits) return "";
 
-    if (digits.startsWith("8") && digits.length === 11) {
+    if (digits.length === 11 && digits[0] === "8") {
       return "+7" + digits.slice(1);
     }
 
-    if (digits.startsWith("7") && digits.length === 11) {
+    if (digits.length === 11 && digits[0] === "7") {
       return "+" + digits;
     }
 
@@ -38,42 +41,36 @@
     return digits;
   }
 
-  function getField(name) {
+  function input(name) {
     return document.querySelector(`input[name="${name}"]`);
   }
 
-  function getPhone() {
-    const hidden = getField("phone");
-    const visible = getField("tildaspec-phone-part[]");
-    return normalizePhone((hidden && hidden.value) || (visible && visible.value) || "");
+  function phone() {
+    const hidden = input("phone");
+    const visible = input("tildaspec-phone-part[]");
+
+    return normalizePhone(
+      (hidden && hidden.value) ||
+      (visible && visible.value) ||
+      ""
+    );
   }
 
-  function getPassword() {
-    const field = getField("password");
-    return field ? field.value : "";
+  function password() {
+    return input("password")?.value || "";
   }
 
-  function getCode() {
-    const field = getField("code");
-    return field ? field.value.trim() : "";
+  function code() {
+    return input("code")?.value.trim() || "";
   }
 
-  function generateRequestId() {
-    if (window.crypto && typeof window.crypto.randomUUID === "function") {
-      return window.crypto.randomUUID();
-    }
-
-    // Fallback for older browsers.
-    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
-      const r = Math.random() * 16 | 0;
-      const v = c === "x" ? r : (r & 0x3 | 0x8);
-      return v.toString(16);
-    });
+  function requestId() {
+    return crypto.randomUUID();
   }
 
-  async function apiRequest(method, endpoint, body, token) {
+  async function api(method, endpoint, body, token = "") {
     const headers = {
-      "accept": "application/json",
+      "Accept": "application/json",
       "x-platform-version": PLATFORM_VERSION,
     };
 
@@ -82,18 +79,18 @@
     }
 
     if (token) {
-      headers["Authorization"] = "Bearer " + token;
+      headers["Authorization"] = `Bearer ${token}`;
     }
 
     const response = await fetch(API_BASE_URL + endpoint, {
       method,
       headers,
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      body: body === undefined ? undefined : JSON.stringify(body),
     });
 
     const text = await response.text();
-    let data = null;
 
+    let data;
     try {
       data = text ? JSON.parse(text) : null;
     } catch {
@@ -102,7 +99,9 @@
 
     if (!response.ok) {
       const message =
-        (data && typeof data === "object" && (data.message || data.errorDescription || data.error)) ||
+        data?.message ||
+        data?.errorDescription ||
+        data?.error ||
         `HTTP ${response.status}`;
 
       throw new Error(message);
@@ -111,45 +110,82 @@
     return data;
   }
 
-  function saveToken(token) {
-    if (token) {
-      sessionStorage.setItem(TOKEN_KEY, token);
+  function setBusy(button, busy) {
+    if (!button) return;
+
+    button.dataset.authBusy = busy ? "1" : "0";
+    button.disabled = busy;
+
+    if (busy) {
+      button.setAttribute("aria-busy", "true");
+    } else {
+      button.removeAttribute("aria-busy");
     }
   }
 
-  function getToken() {
-    return sessionStorage.getItem(TOKEN_KEY) || "";
-  }
+  function showError(error) {
+    console.error("[Custom Auth]", error);
 
-  function showStatus(text) {
-    const element = document.querySelector(".auth-token .tn-atom");
-    if (element) {
-      element.textContent = text;
-    }
-  }
+    const message = error?.message || "Произошла ошибка.";
 
-  async function loadUserAndGoToStatus(token) {
-    const user = await apiRequest("GET", ENDPOINTS.user, undefined, token);
+    // Do not use Tilda's form validation/captcha.
+    // Show our own error.
+    let box = document.querySelector("[data-custom-auth-error]");
 
-    const name = String(user?.name || "").trim();
-    const surname = String(user?.surname || "").trim();
-    const fullName = [name, surname].filter(Boolean).join(" ");
+    if (!box) {
+      box = document.createElement("div");
+      box.dataset.customAuthError = "1";
+      box.style.cssText =
+        "margin-top:10px;color:#c00;font-size:14px;line-height:1.4;";
 
-    sessionStorage.setItem(USER_NAME_KEY, fullName);
-    window.location.href = "/status";
-  }
+      const target =
+        document.querySelector("input[name='code']") ||
+        document.querySelector("input[name='password']") ||
+        document.querySelector("input[name='tildaspec-phone-part[]']") ||
+        document.querySelector("input[name='phone']");
 
-  async function login() {
-    const loginValue = getPhone();
-    const password = getPassword();
-
-    if (!loginValue || !password) {
-      throw new Error("Введите телефон и пароль.");
+      (target?.parentElement || document.body).appendChild(box);
     }
 
-    const result = await apiRequest("POST", ENDPOINTS.login, {
-      login: loginValue,
-      password,
+    box.textContent = message;
+  }
+
+  function clearError() {
+    document.querySelector("[data-custom-auth-error]")?.remove();
+  }
+
+  function redirect(path) {
+    window.location.assign(path);
+  }
+
+  async function getUserAndOpenStatus(token) {
+    const user = await api("GET", ENDPOINTS.user, undefined, token);
+
+    const fullName = [
+      user?.name,
+      user?.surname,
+    ]
+      .map(value => String(value || "").trim())
+      .filter(Boolean)
+      .join(" ");
+
+    sessionStorage.setItem(KEYS.userName, fullName);
+
+    redirect("/status");
+  }
+
+  // ---------- API flows ----------
+
+  async function loginFlow() {
+    const login = phone();
+    const pass = password();
+
+    if (!login) throw new Error("Введите телефон.");
+    if (!pass) throw new Error("Введите пароль.");
+
+    const result = await api("POST", ENDPOINTS.login, {
+      login,
+      password: pass,
       phone: "",
     });
 
@@ -157,112 +193,159 @@
       throw new Error("Сервер не вернул токен.");
     }
 
-    saveToken(result.token);
-    await loadUserAndGoToStatus(result.token);
+    sessionStorage.setItem(KEYS.token, result.token);
+
+    await getUserAndOpenStatus(result.token);
   }
 
-  async function sendRegisterPin() {
-    const loginValue = getPhone();
-    const password = getPassword();
+  async function registerSendPinFlow() {
+    const login = phone();
+    const pass = password();
 
-    if (!loginValue || !password) {
-      throw new Error("Введите телефон и пароль.");
-    }
+    if (!login) throw new Error("Введите телефон.");
+    if (!pass) throw new Error("Введите пароль.");
 
-    sessionStorage.setItem(REGISTER_PHONE_KEY, loginValue);
-    sessionStorage.setItem(REGISTER_PASSWORD_KEY, password);
+    sessionStorage.setItem(KEYS.phone, login);
+    sessionStorage.setItem(KEYS.password, pass);
 
-    await apiRequest("POST", ENDPOINTS.registerPin, {
-      login: loginValue,
+    await api("POST", ENDPOINTS.sendPin, {
+      login,
     });
 
-    window.location.href = "/confirm";
+    redirect("/confirm");
   }
 
-  async function confirmRegisterPin() {
-    const loginValue = sessionStorage.getItem(REGISTER_PHONE_KEY) || "";
-    const password = sessionStorage.getItem(REGISTER_PASSWORD_KEY) || "";
-    const pin = getCode();
+  async function registerConfirmFlow() {
+    const login = sessionStorage.getItem(KEYS.phone) || "";
+    const pass = sessionStorage.getItem(KEYS.password) || "";
+    const pin = code();
 
-    if (!loginValue || !password) {
-      throw new Error("Данные регистрации не найдены. Начните регистрацию заново.");
+    if (!login || !pass) {
+      throw new Error("Данные регистрации потеряны. Начните регистрацию заново.");
     }
 
     if (!pin) {
       throw new Error("Введите код из SMS.");
     }
 
-    const confirmation = await apiRequest("POST", ENDPOINTS.registerPinConfirm, {
+    const confirmation = await api("POST", ENDPOINTS.confirmPin, {
       pin,
-      login: loginValue,
+      login,
     });
 
     if (confirmation?.status !== "PHONE_CONFIRMED") {
       throw new Error("Телефон не подтвержден.");
     }
 
-    // После подтверждения SMS логин НЕ выполняем.
-    // Сразу создаем пользователя и получаем новый Bearer token.
-    const userCreation = await apiRequest("POST", ENDPOINTS.registerUser, {
-      login: loginValue,
-      password,
+    // IMPORTANT:
+    // No login request here.
+    // User is created immediately after phone confirmation.
+    const createdUser = await api("POST", ENDPOINTS.createUser, {
+      login,
+      password: pass,
       politicAgreements: true,
-      hash: generateRequestId(),
+      hash: requestId(),
     });
 
-    if (!userCreation?.token) {
-      throw new Error("Сервер не вернул токен после создания пользователя.");
+    if (!createdUser?.token) {
+      throw new Error("Пользователь создан, но сервер не вернул токен.");
     }
 
-    saveToken(userCreation.token);
+    sessionStorage.setItem(KEYS.token, createdUser.token);
 
-    // После создания пользователя сразу запрашиваем данные текущего пользователя.
-    await loadUserAndGoToStatus(userCreation.token);
+    // Immediately request user data using the token returned by /auth/user.
+    await getUserAndOpenStatus(createdUser.token);
   }
 
-  function showSavedUserName() {
-    const fullName = sessionStorage.getItem(USER_NAME_KEY) || "";
-    showStatus(fullName);
+  function statusFlow() {
+    const element = document.querySelector(".auth-token .tn-atom");
+
+    if (!element) return;
+
+    element.textContent =
+      sessionStorage.getItem(KEYS.userName) || "";
   }
 
-  function bindOnce(selector, handler) {
-    const form = document.querySelector(selector);
-    if (!form || form.dataset.tildaAuthBound === "1") return;
+  // ---------- OUR OWN BUTTON HANDLING ----------
 
-    form.dataset.tildaAuthBound = "1";
+  /*
+   * We intentionally DO NOT listen to "submit".
+   *
+   * This is the important difference from the previous version.
+   * Tilda's submit/captcha system is never invoked by our flow.
+   */
 
-    form.addEventListener("submit", async event => {
+  function findButton() {
+    // First priority: an explicitly marked custom auth button.
+    const explicit = document.querySelector(
+      "[data-custom-auth-button]"
+    );
+
+    if (explicit) return explicit;
+
+    // Otherwise use the visible submit/button control inside the page.
+    return (
+      document.querySelector("button[type='submit']") ||
+      document.querySelector("input[type='submit']") ||
+      document.querySelector(".t-submit")
+    );
+  }
+
+  function bindButton(handler) {
+    const button = findButton();
+
+    if (!button) {
+      console.warn("[Custom Auth] Auth button not found.");
+      return;
+    }
+
+    if (button.dataset.customAuthBound === "1") return;
+
+    button.dataset.customAuthBound = "1";
+    button.setAttribute("type", "button");
+
+    button.addEventListener("click", async event => {
+      // Stop Tilda's click/submit chain.
       event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+
+      if (button.dataset.authBusy === "1") return;
+
+      clearError();
+      setBusy(button, true);
 
       try {
         await handler();
       } catch (error) {
-        console.error("[Tilda Auth]", error);
-        alert(error?.message || "Произошла ошибка.");
+        showError(error);
+      } finally {
+        setBusy(button, false);
       }
-    });
+    }, true);
   }
 
   function init() {
-    const path = window.location.pathname.replace(/\/+$/, "") || "/";
+    const path =
+      window.location.pathname.replace(/\/+$/, "") || "/";
 
     if (path === "/" || path === "/auth") {
-      bindOnce("form", login);
+      bindButton(loginFlow);
       return;
     }
 
     if (path === "/register") {
-      bindOnce("form", sendRegisterPin);
+      bindButton(registerSendPinFlow);
       return;
     }
 
     if (path === "/confirm") {
-      bindOnce("form", confirmRegisterPin);
+      bindButton(registerConfirmFlow);
       return;
     }
 
     if (path === "/status") {
-      showSavedUserName();
+      statusFlow();
     }
   }
 
